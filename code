@@ -1,1 +1,100 @@
+from google.colab import drive
+import pickle
+from nltk.stem import WordNetLemmatizer
+from nltk import word_tokenize
+from nltk.stem import PorterStemmer
+from nltk.corpus import stopwords
+import os
+import re
+import pandas as pd
+import numpy as np
+
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+from scipy.sparse import find
+from sklearn.metrics.pairwise import euclidean_distances
+from sklearn.metrics.pairwise import cosine_similarity
+
+
+from sentence_transformers import SentenceTransformer, util
+
+import nltk
+nltk.download('punkt')
+nltk.download('wordnet')
+nltk.download('stopwords')
+
+drive.mount('/content/drive')
+
+
+DATA_PATH = '/content/drive/MyDrive/st4_groupe6/data'
+
+posts = pd.read_xml(os.path.join(DATA_PATH, 'Posts.xml'),
+                    parser="etree", encoding="utf8")
+
+
+blacklist = "!@#$%^&*()[]{};:,.<>?/~`-='\"|"
+table = str.maketrans('', '', blacklist)
+pattern = r"<.*?>"  # Pattern pour les balises HTML
+pattern2 = r"\s+"   # Pattern pour les whitespaces
+stop_words = set(stopwords.words('english'))
+
+
+def clean_post(text: str) -> str:
+    # Remove tags
+    text = re.sub(pattern, "", text)  # Suppression des balises
+    text = re.sub(pattern2, " ", text)  # Suppression des \n et autres
+
+    # Remove special characters and lower text
+    text = text.lower().translate(table)
+
+    # Tokenize
+    words = nltk.word_tokenize(text)
+
+    # Remove stopWords
+    filtered_words = [word for word in words if word not in stop_words]
+
+    # Stemming
+    stemmer = PorterStemmer()
+    tokens = [stemmer.stem(token) for token in filtered_words]
+    return " ".join(tokens)
+
+
+posts['cleaned_body'] = posts['Body'].fillna('').apply(clean_post)
+
+
+def clean_query(text: str) -> str:
+    return clean_post(text)
+
+
+sentence_transformer_model = 'all-MiniLM-L6-v2'
+MODEL_ST = SentenceTransformer(sentence_transformer_model)
+
+embeddings = MODEL_ST.encode(
+    posts.cleaned_body.values, normalize_embeddings=True)
+
+with open(os.path.join(DATA_PATH, 'embeddings.pkl'), 'wb') as file:
+    pickle.dump(embeddings, file)
+
+
+def encode_query(query: str) -> np.ndarray:
+    encoded_query = MODEL_ST.encode(
+        [clean_query(query)], normalize_embeddings=True)
+    return encoded_query
+
+
+def similarity(query, embeddings=embeddings):
+    query_embedding = encode_query(query)
+    similarity_matrix = cosine_similarity(query_embedding, embeddings)
+    return similarity_matrix
+
+
+def ordre_en_fonction_similarité(matrix_similarity: np.ndarray):
+    ordre = np.argsort(matrix_similarity)[0][::-1]
+    return ordre
+
+
+def closest_semantic_doc(query, embeddings=embeddings, top_n=5):
+    similarity_matrix = similarity(query, embeddings)
+    ordre = ordre_en_fonction_similarité(similarity_matrix)
+    return posts.iloc[ordre[:top_n]]
 
